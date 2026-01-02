@@ -1,28 +1,52 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from pydantic import BaseModel
+# Import the engine functions we just wrote
+from pdf_engine import extract_text_from_pdf, count_tokens
 
-# 1. Initialize the App
-# This is the entry point for all API requests.
 app = FastAPI(
     title="Adaptive Compressor API",
-    version="0.1",
-    description="A map-reduce system for constraint-based summarization."
+    version="0.1"
 )
 
-# 2. Define Data Models (First Principles: Strict Typing)
-# We use Pydantic to enforce the shape of data. 
-# If the frontend sends text, this will explode, ensuring data integrity.
+# --- Data Models ---
 class HealthCheck(BaseModel):
     status: str
     version: str
 
-# 3. Define Routes (Endpoints)
-# The @app.get decorator tells FastAPI to listen for GET requests at "/"
+class UploadResponse(BaseModel):
+    filename: str
+    total_tokens: int
+    text_preview: str  # First 100 characters, just to check
+
+# --- Routes ---
+
 @app.get("/", response_model=HealthCheck)
 async def health_check():
-    # "async" is critical here. It means this function won't block 
-    # the server while it runs.
     return {"status": "ok", "version": "0.1"}
 
-# 4. Run instructions:
-# In terminal: uvicorn main:app --reload
+@app.post("/upload", response_model=UploadResponse)
+async def upload_pdf(file: UploadFile = File(...)):
+    """
+    Receives a PDF file, extracts text, and returns the token count.
+    """
+    # 1. Validation: Ensure it is a PDF
+    if file.content_type != "application/pdf":
+        raise HTTPException(status_code=400, detail="File must be a PDF")
+
+    try:
+        # 2. Read the raw bytes (Async read)
+        contents = await file.read()
+        
+        # 3. Process the file using our Engine
+        text = extract_text_from_pdf(contents)
+        token_count = count_tokens(text)
+        
+        # 4. Return the stats
+        return {
+            "filename": file.filename,
+            "total_tokens": token_count,
+            "text_preview": text[:100] + "..." # Just show the beginning
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
