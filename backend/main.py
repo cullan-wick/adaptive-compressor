@@ -2,10 +2,24 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from pydantic import BaseModel
 # Import the engine functions we just wrote
 from pdf_engine import extract_text_from_pdf, count_tokens
+# For PostgreSQL
+from contextlib import asynccontextmanager
+from database import engine, Base, get_db
+import models
+
+# Create tables on startup
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # This runs BEFORE the app starts receiving requests
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield
+    # (Code after yield runs when app shuts down)
 
 app = FastAPI(
     title="Adaptive Compressor API",
-    version="0.1"
+    version="0.1",
+    lifespan=lifespan # <--- Register the logic here
 )
 
 # --- Data Models ---
