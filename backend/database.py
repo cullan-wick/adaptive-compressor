@@ -4,6 +4,7 @@ import os
 
 # 1. The Connection String
 # The format is: driver://user@host/database_name
+# we are using the asyncpg driver, which is way faster!
 DATABASE_URL = "postgresql+asyncpg://cullanwickramasuriya@localhost/adaptive_compressor_db"
 
 
@@ -11,7 +12,7 @@ DATABASE_URL = "postgresql+asyncpg://cullanwickramasuriya@localhost/adaptive_com
 # This creates the pool of connections to the DB.
 engine = create_async_engine(DATABASE_URL, echo=True)
 
-# 3. The Session Factory
+# 3. The Session Factory (Session Pooling)
 # When a user requests data, we give them a specific "Session" from the pool.
 SessionLocal = sessionmaker(
     bind=engine,
