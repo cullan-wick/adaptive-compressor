@@ -36,3 +36,15 @@ async def create_book_chunks(db: AsyncSession, chunks_data: list):
         db.add(new_chunk)
     
     await db.commit()
+
+async def get_book_chunks(db: AsyncSession, book_id: int):
+    """
+    Retrieves all chunks for a specific book, ordered by index.
+    """
+    # SQL: SELECT * FROM book_chunks WHERE book_id = X ORDER BY chunk_index ASC
+    result = await db.execute(
+        select(BookChunk)
+        .where(BookChunk.book_id == book_id)
+        .order_by(BookChunk.chunk_index)
+    )
+    return result.scalars().all()

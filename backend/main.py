@@ -8,6 +8,7 @@ from database import engine, Base, get_db
 import models
 import crud  # <--- New! Use the logic from crud.py
 from pdf_engine import extract_text_from_pdf, count_tokens, chunk_text, get_embeddings # <--- New functions
+from ai_engine import summarize_chunk
 
 # Create tables on startup
 @asynccontextmanager
@@ -95,3 +96,39 @@ async def upload_pdf(
     except Exception as e:
         print(f"Error: {e}") # This prints the specific error to your terminal
         raise HTTPException(status_code=500, detail=str(e))
+    
+
+
+@app.post("/summarize/{book_id}")
+async def summarize_book(book_id: int, db: AsyncSession = Depends(get_db)):
+    """
+    The 'Map' Step: Iterates through every chunk of the book and summarizes it.
+    """
+    # 1. Fetch all chunks from DB
+    chunks = await crud.get_book_chunks(db, book_id)
+    
+    if not chunks:
+        raise HTTPException(status_code=404, detail="Book not found or no chunks")
+    
+    summaries = []
+    
+    # 2. Iterate and Summarize (The Map Loop)
+    print(f"Found {len(chunks)} chunks. Starting summarization...")
+    
+    for chunk in chunks:
+        # Call the AI Engine (Day 5 Logic)
+        summary = await summarize_chunk(chunk.text_content)
+        summaries.append(summary)
+        
+        # Print progress to terminal so you know it's not frozen
+        print(f"Summarized Chunk {chunk.chunk_index}/{len(chunks)}")
+        
+    # 3. Simple Reduce (For today)
+    # Join all chunk summaries into one giant string
+    final_summary = "\n\n".join(summaries)
+    
+    return {
+        "book_id": book_id,
+        "original_chunks": len(chunks),
+        "condensed_content": final_summary
+    }
