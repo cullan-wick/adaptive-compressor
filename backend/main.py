@@ -10,6 +10,9 @@ import crud  # <--- New! Use the logic from crud.py
 from pdf_engine import extract_text_from_pdf, count_tokens, chunk_text, get_embeddings # <--- New functions
 from ai_engine import summarize_chunk
 
+from utils import calculate_word_budget, count_words
+from ai_engine import summarize_chunk, reduce_summary
+
 # Create tables on startup
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -100,35 +103,59 @@ async def upload_pdf(
 
 
 @app.post("/summarize/{book_id}")
-async def summarize_book(book_id: int, db: AsyncSession = Depends(get_db)):
+async def summarize_book(
+    book_id: int, 
+    time_limit: int = 15, # Default 15 minutes
+    wpm: int = 250,       # Default speed
+    db: AsyncSession = Depends(get_db)
+):
     """
-    The 'Map' Step: Iterates through every chunk of the book and summarizes it.
+    Map-Reduce Pipeline:
+    1. Fetch Chunks
+    2. Map (Summarize each chunk)
+    3. Reduce (Compress total to fit time limit)
     """
-    # 1. Fetch all chunks from DB
+    # --- PHASE 0: SETUP ---
+    target_word_count = calculate_word_budget(time_limit, wpm)
+    print(f"Target Budget: {target_word_count} words ({time_limit} mins @ {wpm} wpm)")
+
+    # --- PHASE 1: FETCH ---
     chunks = await crud.get_book_chunks(db, book_id)
-    
     if not chunks:
-        raise HTTPException(status_code=404, detail="Book not found or no chunks")
+        raise HTTPException(status_code=404, detail="Book not found")
     
-    summaries = []
-    
-    # 2. Iterate and Summarize (The Map Loop)
-    print(f"Found {len(chunks)} chunks. Starting summarization...")
+    # --- PHASE 2: MAP (Parallel would be better, doing sequential for safety) ---
+    map_summaries = []
+    print(f"Starting Map Phase for {len(chunks)} chunks...")
     
     for chunk in chunks:
-        # Call the AI Engine (Day 5 Logic)
+        # Optimization: Don't re-summarize if we already did? 
+        # For now, we just run it. In Day 7 we can add caching.
         summary = await summarize_chunk(chunk.text_content)
-        summaries.append(summary)
-        
-        # Print progress to terminal so you know it's not frozen
-        print(f"Summarized Chunk {chunk.chunk_index}/{len(chunks)}")
-        
-    # 3. Simple Reduce (For today)
-    # Join all chunk summaries into one giant string
-    final_summary = "\n\n".join(summaries)
+        map_summaries.append(summary)
+        print(f"Mapped Chunk {chunk.chunk_index}/{len(chunks)}")
     
+    # Join them to see how big the "Draft 1" is
+    full_draft = "\n\n".join(map_summaries)
+    current_words = count_words(full_draft)
+    print(f"Draft 1 Length: {current_words} words")
+    
+    # --- PHASE 3: REDUCE ---
+    final_content = full_draft
+    
+    # Only reduce if we are OVER budget
+    if current_words > target_word_count:
+        print("Draft is too long. Entering Reduce Phase...")
+        final_content = await reduce_summary(full_draft, target_word_count)
+        final_words = count_words(final_content)
+        print(f"Draft 2 (Final) Length: {final_words} words")
+    else:
+        print("Draft is within budget. Skipping Reduce.")
+
     return {
         "book_id": book_id,
-        "original_chunks": len(chunks),
-        "condensed_content": final_summary
+        "target_words": target_word_count,
+        "original_summary_words": current_words,
+        "final_summary_words": count_words(final_content),
+        "condensed_content": final_content
     }
