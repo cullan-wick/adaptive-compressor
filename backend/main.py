@@ -1,17 +1,22 @@
+import asyncio
+from contextlib import asynccontextmanager
+
+# Third Party imports
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from contextlib import asynccontextmanager
+from fastapi.middleware.cors import CORSMiddleware
 
 # Internal imports
 from database import engine, Base, get_db
 import models
-import crud  # <--- New! Use the logic from crud.py
+import crud
 from pdf_engine import extract_text_from_pdf, count_tokens, chunk_text, get_embeddings # <--- New functions
 from ai_engine import summarize_chunk
-
 from utils import calculate_word_budget, count_words
 from ai_engine import summarize_chunk, reduce_summary
+
+
 
 # Create tables on startup
 @asynccontextmanager
@@ -28,15 +33,25 @@ app = FastAPI(
     lifespan=lifespan # <--- Register the logic here
 )
 
+# ALLOW FRONTEND TO TALK TO BACKEND
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"], # The Next.js Port
+    allow_credentials=True,
+    allow_methods=["*"], # Allow POST, GET, OPTIONS, etc.
+    allow_headers=["*"],
+)
+
 # --- Data Models ---
 class HealthCheck(BaseModel):
     status: str
     version: str
 
 class UploadResponse(BaseModel):
+    book_id: int  # <--- Added this field
     filename: str
     total_tokens: int
-    text_preview: str  # First 100 characters, just to check
+    text_preview: str
 
 # --- Routes ---
 
@@ -91,6 +106,7 @@ async def upload_pdf(
         
         # 8. Return Success
         return {
+            "book_id": book.id, # <--- Added this value
             "filename": book.filename,
             "total_tokens": book.total_tokens,
             "text_preview": full_text[:100] + "..."
@@ -102,40 +118,46 @@ async def upload_pdf(
     
 
 
+
 @app.post("/summarize/{book_id}")
 async def summarize_book(
     book_id: int, 
-    time_limit: int = 15, # Default 15 minutes
-    wpm: int = 250,       # Default speed
+    time_limit: int = 15, 
+    wpm: int = 250,       
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Map-Reduce Pipeline:
-    1. Fetch Chunks
-    2. Map (Summarize each chunk)
-    3. Reduce (Compress total to fit time limit)
+    Map-Reduce Pipeline (Optimized with Parallel Processing)
     """
     # --- PHASE 0: SETUP ---
     target_word_count = calculate_word_budget(time_limit, wpm)
-    print(f"Target Budget: {target_word_count} words ({time_limit} mins @ {wpm} wpm)")
+    print(f"Target Budget: {target_word_count} words")
 
     # --- PHASE 1: FETCH ---
     chunks = await crud.get_book_chunks(db, book_id)
     if not chunks:
         raise HTTPException(status_code=404, detail="Book not found")
     
-    # --- PHASE 2: MAP (Parallel would be better, doing sequential for safety) ---
-    map_summaries = []
+    # --- PHASE 2: PARALLEL MAP ---
     print(f"Starting Map Phase for {len(chunks)} chunks...")
     
-    for chunk in chunks:
-        # Optimization: Don't re-summarize if we already did? 
-        # For now, we just run it. In Day 7 we can add caching.
-        summary = await summarize_chunk(chunk.text_content)
-        map_summaries.append(summary)
-        print(f"Mapped Chunk {chunk.chunk_index}/{len(chunks)}")
+    # A Semaphore limits us to 20 concurrent requests to avoid OpenAI 429 Errors
+    # 20 is safe for 'gpt-4o-mini' tier 1 usage.
+    semaphore = asyncio.Semaphore(20) 
+
+    async def processed_chunk(chunk):
+        async with semaphore: # Wait here if 20 requests are already running
+            # We don't need the print statement clogging the logs anymore
+            return await summarize_chunk(chunk.text_content)
+
+    # Create 300+ tasks instantly
+    tasks = [processed_chunk(chunk) for chunk in chunks]
     
-    # Join them to see how big the "Draft 1" is
+    # Run them all at the same time (Respecting the semaphore limit)
+    # asyncio.gather preserves the order of the results, so the story stays linear.
+    map_summaries = await asyncio.gather(*tasks)
+    
+    # Join them
     full_draft = "\n\n".join(map_summaries)
     current_words = count_words(full_draft)
     print(f"Draft 1 Length: {current_words} words")
@@ -143,12 +165,10 @@ async def summarize_book(
     # --- PHASE 3: REDUCE ---
     final_content = full_draft
     
-    # Only reduce if we are OVER budget
     if current_words > target_word_count:
         print("Draft is too long. Entering Reduce Phase...")
         final_content = await reduce_summary(full_draft, target_word_count)
-        final_words = count_words(final_content)
-        print(f"Draft 2 (Final) Length: {final_words} words")
+        print(f"Draft 2 (Final) Length: {count_words(final_content)} words")
     else:
         print("Draft is within budget. Skipping Reduce.")
 

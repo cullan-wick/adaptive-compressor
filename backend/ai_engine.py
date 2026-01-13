@@ -1,73 +1,114 @@
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+import math
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
 
 # 1. The Model
-# We use 'gpt-4o-mini' because it is cheap and fast for summarizing 300 chunks.
-# temperature=0 means "be strict and factual, don't be creative."
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+# We use temperature=0.2 to allow for slightly better writing flow while staying factual.
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
 
-# 2. The "Map" Prompt
-# This instructs the AI on how to handle a SINGLE chunk.
+# ==========================================
+# PHASE 1: THE SMART MAP (Fixing Voice & Noise)
+# ==========================================
+
 map_prompt = ChatPromptTemplate.from_messages([
-    ("system", "You are a helpful assistant that summarizes sections of a book."),
-    ("human", "Summarize the following text efficiently. Capture the main arguments and key details. Do not use intro phrases like 'this section discusses'. Just give the summary.\n\nTEXT:\n{text}")
+    ("system", """
+    You are the original author of this book. You are rewriting your book to be concise, fast-paced, and dense with information.
+    
+    RULES:
+    1. Write in the first person (or matching the book's original voice). 
+    2. NEVER say "The author says" or "The text discusses." Just write the content directly.
+    3. IGNORE: Copyright pages, table of contents, dedication pages, and legal disclaimers. 
+    4. If the chunk is purely "fluff" (legal/metadata) or empty, return the string "SKIP".
+    """),
+    ("human", "Rewrite this section concisely:\n\n{text}")
 ])
 
-# 3. The Chain
-# This connects the Prompt -> Model -> Output Parser (converts AI object to string)
 map_chain = map_prompt | llm | StrOutputParser()
 
 async def summarize_chunk(text: str) -> str:
     """
-    Takes a raw text chunk and returns a condensed summary.
+    Summarizes a single chunk. Returns empty string if it's garbage.
     """
     try:
-        # We use ainvoke (Async Invoke) because we are running in FastAPI
         response = await map_chain.ainvoke({"text": text})
+        # If the AI detects garbage, it returns "SKIP". We filter that out.
+        if "SKIP" in response:
+            return "" 
         return response
     except Exception as e:
-        print(f"AI Error: {e}")
-        return text # If AI fails, just return original text so we don't lose data
-    
+        print(f"AI Map Error: {e}")
+        return text 
 
-# 1. The Reduce Prompt
-# We inject 'target_words' as a variable so the AI knows the constraint.
+# ==========================================
+# PHASE 2: THE RECURSIVE REDUCE (Fixing Over-Compression)
+# ==========================================
+
 reduce_prompt = ChatPromptTemplate.from_messages([
-    ("system", "You are a ruthless editor. Your goal is to compress text without losing the core thesis."),
+    ("system", "You are an expert editor. Your goal is to tighten the prose without losing detail."),
     ("human", """
-    Here is a long summary of a book:
+    Here is a section of a book draft:
     {text}
     
-    Please rewrite this to be roughly {target_words} words. 
-    Focus on the most actionable tactics and the central argument. 
-    Drop all anecdotes, fluff, and repetitive examples. 
-    Keep the tone professional and dense.
+    Please rewrite this to be approximately {target_words} words.
+    - Keep the voice identical to the input.
+    - Do not summarize high-level concepts; keep specific tactics, numbers, and lists.
+    - If the text is already short enough, just polish it.
     """)
 ])
 
-# 2. The Reduce Chain
 reduce_chain = reduce_prompt | llm | StrOutputParser()
 
-async def reduce_summary(text: str, target_words: int) -> str:
+async def recursive_reduce(text: str, target_words: int) -> str:
     """
-    Takes a long summary and compresses it to fit the budget.
+    Intelligently splits the text if it's too big for one pass, 
+    reduces the parts, and stitches them back together.
     """
-    # Simple whitespace split to guess word count for debug log
-    current_count = len(text.split())
-    print(f"DEBUG: Reducing text from {current_count} words to {target_words} words...")
+    word_count = len(text.split())
     
-    try:
-        # We pass BOTH the text and the target number to the prompt
-        response = await reduce_chain.ainvoke({
-            "text": text, 
-            "target_words": target_words
-        })
-        return response
-    except Exception as e:
-        print(f"AI Reduce Error: {e}")
-        return text
+    # BASE CASE: If text is small enough (approx 2500 words), process it directly.
+    # GPT-4o-mini works best when input is under ~3000 tokens for complex logic.
+    if word_count < 2500:
+        print(f"   -> Reducing block ({word_count} words) to target ({target_words} words)...")
+        return await reduce_chain.ainvoke({"text": text, "target_words": target_words})
+
+    # RECURSIVE STEP: Split text in half and conquer
+    print(f"   -> Splitting large block ({word_count} words)...")
+    
+    # 1. Split text roughly in half by double newline (paragraphs) to avoid cutting sentences
+    paragraphs = text.split("\n\n")
+    mid_point = len(paragraphs) // 2
+    
+    # Safety check: if no paragraphs, split by single newline
+    if mid_point == 0:
+        paragraphs = text.split("\n")
+        mid_point = len(paragraphs) // 2
+
+    part1 = "\n\n".join(paragraphs[:mid_point])
+    part2 = "\n\n".join(paragraphs[mid_point:])
+    
+    # 2. Calculate proportional targets
+    # If Part 1 is 60% of the text, it gets 60% of the word budget.
+    total_len = len(part1) + len(part2)
+    
+    # Avoid division by zero
+    if total_len == 0:
+        return ""
+
+    target1 = math.floor(target_words * (len(part1) / total_len))
+    target2 = target_words - target1
+    
+    # 3. Recurse (Call this function again on the parts)
+    reduced_part1 = await recursive_reduce(part1, target1)
+    reduced_part2 = await recursive_reduce(part2, target2)
+    
+    return reduced_part1 + "\n\n" + reduced_part2
+
+# Wrapper for compatibility with main.py
+async def reduce_summary(text: str, target_words: int) -> str:
+    print(f"DEBUG: Starting Recursive Reduce. Input: {len(text.split())} words. Target: {target_words}")
+    return await recursive_reduce(text, target_words)
