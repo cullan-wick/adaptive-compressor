@@ -7,23 +7,24 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# 1. The Model
-# We use temperature=0.2 to allow for slightly better writing flow while staying factual.
+# Keep temperature low for formatting strictness
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
 
 # ==========================================
-# PHASE 1: THE SMART MAP (Fixing Voice & Noise)
+# PHASE 1: THE FILTERING MAP
 # ==========================================
 
 map_prompt = ChatPromptTemplate.from_messages([
     ("system", """
-    You are the original author of this book. You are rewriting your book to be concise, fast-paced, and dense with information.
+    You are the original author rewriting your book. 
     
-    RULES:
-    1. Write in the first person (or matching the book's original voice). 
-    2. NEVER say "The author says" or "The text discusses." Just write the content directly.
-    3. IGNORE: Copyright pages, table of contents, dedication pages, and legal disclaimers. 
-    4. If the chunk is purely "fluff" (legal/metadata) or empty, return the string "SKIP".
+    CRITICAL RULES:
+    1. IGNORE & SKIP: Copyright pages, Table of Contents, Dedications, "Notes from the Author," "Forewords," and "How to read this book."
+    2. If the chunk is fluff/skipped, return the string "SKIP".
+
+    WRITING RULES:
+    1. Write in the first person ("I argue...", "I found...").
+    2. Be dense and actionable.
     """),
     ("human", "Rewrite this section concisely:\n\n{text}")
 ])
@@ -31,12 +32,8 @@ map_prompt = ChatPromptTemplate.from_messages([
 map_chain = map_prompt | llm | StrOutputParser()
 
 async def summarize_chunk(text: str) -> str:
-    """
-    Summarizes a single chunk. Returns empty string if it's garbage.
-    """
     try:
         response = await map_chain.ainvoke({"text": text})
-        # If the AI detects garbage, it returns "SKIP". We filter that out.
         if "SKIP" in response:
             return "" 
         return response
@@ -45,45 +42,50 @@ async def summarize_chunk(text: str) -> str:
         return text 
 
 # ==========================================
-# PHASE 2: THE RECURSIVE REDUCE (Fixing Over-Compression)
+# PHASE 2: THE CLEAN REDUCE
 # ==========================================
 
 reduce_prompt = ChatPromptTemplate.from_messages([
-    ("system", "You are an expert editor. Your goal is to tighten the prose without losing detail."),
+    ("system", "You are an expert editor. Your goal is to tighten the prose, format it for readability, and fix structural repetition."),
     ("human", """
-    Here is a section of a book draft:
+    Here is a book draft composed of several merged chunks:
     {text}
     
     Please rewrite this to be approximately {target_words} words.
-    - Keep the voice identical to the input.
-    - Do not summarize high-level concepts; keep specific tactics, numbers, and lists.
-    - If the text is already short enough, just polish it.
+    
+    STYLE GUIDE:
+    1. **Voice:** Keep the author's voice (First Person).
+    2. **Structure (CRITICAL):**
+       - The input text may have REPEATED headers (e.g., "Rule #1" appearing 3 times).
+       - **MERGE** these duplicate sections. Do not list "Rule #1" multiple times. Group all content that belongs to Rule #1 under a SINGLE header.
+       - Correct mislabeled headers. If the text looks like an Intro, don't label it "Rule #1".
+    3. **Formatting:**
+       - Use `### ` for section headers.
+       - STRICTLY NO BOLDING.
+       - STRICTLY NO INDENTATION.
+       - Separate paragraphs with double newlines.
+    4. **Content:** Drop all "Notes from the author."
+    
+    Output purely Markdown.
     """)
 ])
 
 reduce_chain = reduce_prompt | llm | StrOutputParser()
 
 async def recursive_reduce(text: str, target_words: int) -> str:
-    """
-    Intelligently splits the text if it's too big for one pass, 
-    reduces the parts, and stitches them back together.
-    """
     word_count = len(text.split())
     
-    # BASE CASE: If text is small enough (approx 2500 words), process it directly.
-    # GPT-4o-mini works best when input is under ~3000 tokens for complex logic.
+    # Base case: Text is small enough to process
     if word_count < 2500:
         print(f"   -> Reducing block ({word_count} words) to target ({target_words} words)...")
         return await reduce_chain.ainvoke({"text": text, "target_words": target_words})
 
-    # RECURSIVE STEP: Split text in half and conquer
+    # Recursive step
     print(f"   -> Splitting large block ({word_count} words)...")
     
-    # 1. Split text roughly in half by double newline (paragraphs) to avoid cutting sentences
     paragraphs = text.split("\n\n")
     mid_point = len(paragraphs) // 2
     
-    # Safety check: if no paragraphs, split by single newline
     if mid_point == 0:
         paragraphs = text.split("\n")
         mid_point = len(paragraphs) // 2
@@ -91,24 +93,17 @@ async def recursive_reduce(text: str, target_words: int) -> str:
     part1 = "\n\n".join(paragraphs[:mid_point])
     part2 = "\n\n".join(paragraphs[mid_point:])
     
-    # 2. Calculate proportional targets
-    # If Part 1 is 60% of the text, it gets 60% of the word budget.
     total_len = len(part1) + len(part2)
-    
-    # Avoid division by zero
-    if total_len == 0:
-        return ""
+    if total_len == 0: return ""
 
     target1 = math.floor(target_words * (len(part1) / total_len))
     target2 = target_words - target1
     
-    # 3. Recurse (Call this function again on the parts)
     reduced_part1 = await recursive_reduce(part1, target1)
     reduced_part2 = await recursive_reduce(part2, target2)
     
     return reduced_part1 + "\n\n" + reduced_part2
 
-# Wrapper for compatibility with main.py
+# Wrapper
 async def reduce_summary(text: str, target_words: int) -> str:
-    print(f"DEBUG: Starting Recursive Reduce. Input: {len(text.split())} words. Target: {target_words}")
     return await recursive_reduce(text, target_words)

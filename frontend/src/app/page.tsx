@@ -58,11 +58,11 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-gray-50 p-8 md:p-12 font-sans text-gray-900">
-      <div className="max-w-6xl mx-auto space-y-8">
-        {/* Main Card */}
+      <div className="max-w-5xl mx-auto space-y-8">
+        {/* TOP CARD: CONTROLS */}
         <div className="bg-white rounded-2xl shadow-xl overflow-hidden border border-gray-100">
           {/* Header */}
-          <div className="bg-gray-900 p-8 text-white">
+          <div className="bg-gray-900 p-8 text-white text-center">
             <h1 className="text-3xl font-bold tracking-tight">
               Adaptive Book Compressor
             </h1>
@@ -71,10 +71,10 @@ export default function Home() {
             </p>
           </div>
 
-          <div className="p-8 grid grid-cols-1 md:grid-cols-2 gap-12">
-            {/* LEFT: Controls */}
-            <div className="space-y-8">
-              {/* File Input */}
+          {/* Controls Container */}
+          <div className="p-8">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
+              {/* Input 1: File */}
               <div className="p-6 border-2 border-dashed border-gray-200 rounded-xl hover:border-blue-500 transition-colors bg-gray-50">
                 <label className="block font-semibold mb-4 text-gray-700">
                   1. Upload Book (PDF)
@@ -87,9 +87,8 @@ export default function Home() {
                 />
               </div>
 
-              {/* Slider */}
-              <div className="p-6 border border-gray-100 rounded-xl shadow-sm bg-white">
-                {/* Fixed: Removed 'block' to resolve conflict with 'flex' */}
+              {/* Input 2: Slider */}
+              <div className="p-6 border border-gray-100 rounded-xl shadow-sm bg-white flex flex-col justify-center">
                 <label className="flex justify-between font-semibold mb-4 text-gray-700">
                   <span>2. Time Budget</span>
                   <span className="text-blue-600 font-bold">
@@ -109,8 +108,10 @@ export default function Home() {
                   <span>Deep Dive (60m)</span>
                 </div>
               </div>
+            </div>
 
-              {/* Generate Button */}
+            {/* Action Area */}
+            <div className="max-w-2xl mx-auto flex flex-col gap-4">
               <button
                 onClick={handleGenerate}
                 disabled={
@@ -130,40 +131,81 @@ export default function Home() {
 
               {/* Status Log */}
               {status !== "idle" && status !== "done" && (
-                <div className="p-4 bg-blue-50 text-blue-800 rounded-lg text-sm font-mono animate-pulse border border-blue-100">
+                <div className="text-center p-3 bg-blue-50 text-blue-800 rounded-lg text-sm font-mono animate-pulse border border-blue-100">
                   &gt; {debugLog}
                 </div>
               )}
             </div>
-
-            {/* RIGHT: Output */}
-            <div className="bg-gray-50 rounded-xl border border-gray-200 p-8 h-96 overflow-y-auto shadow-inner">
-              {status === "done" ? (
-                <article className="prose prose-blue max-w-none">
-                  <ReactMarkdown>{summary}</ReactMarkdown>
-                </article>
-              ) : (
-                <div className="h-full flex flex-col items-center justify-center text-gray-400 space-y-4">
-                  <svg
-                    className="w-16 h-16 opacity-20"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth="2"
-                      d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"
-                    ></path>
-                  </svg>
-                  <p className="font-medium">
-                    Your summary will be generated here.
-                  </p>
-                </div>
-              )}
-            </div>
           </div>
+        </div>
+
+        {/* BOTTOM CARD: SUMMARY OUTPUT */}
+        <div className="bg-white rounded-2xl shadow-xl border border-gray-100 p-8 md:p-12 min-h-125">
+          {status === "done" ? (
+            <article className="prose prose-lg prose-blue max-w-none">
+              <ReactMarkdown
+                components={{
+                  // 1. Force large margins (mb-6) between paragraphs for readability
+                  p: ({ node, ...props }) => (
+                    <p
+                      className="mb-6 leading-relaxed text-gray-800"
+                      {...props}
+                    />
+                  ),
+                  // 2. Style headers to be distinct (No bolding in text, but bold headers is nice)
+                  h1: ({ node, ...props }) => (
+                    <h1
+                      className="text-3xl font-bold mt-8 mb-4 text-gray-900"
+                      {...props}
+                    />
+                  ),
+                  h2: ({ node, ...props }) => (
+                    <h2
+                      className="text-2xl font-bold mt-8 mb-4 text-gray-900 border-b pb-2"
+                      {...props}
+                    />
+                  ),
+                  h3: ({ node, ...props }) => (
+                    <h3
+                      className="text-xl font-bold mt-6 mb-3 text-blue-700"
+                      {...props}
+                    />
+                  ),
+                  // 3. Style lists
+                  ul: ({ node, ...props }) => (
+                    <ul className="list-disc pl-5 mb-6 space-y-2" {...props} />
+                  ),
+                  li: ({ node, ...props }) => (
+                    <li className="pl-1" {...props} />
+                  ),
+                }}
+              >
+                {summary}
+              </ReactMarkdown>
+            </article>
+          ) : (
+            // PLACEHOLDER STATE
+            <div className="h-full flex flex-col items-center justify-center text-gray-400 space-y-6 min-h-75">
+              <div className="w-24 h-24 bg-gray-100 rounded-full flex items-center justify-center">
+                <svg
+                  className="w-12 h-12 opacity-20 text-gray-600"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="2"
+                    d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"
+                  ></path>
+                </svg>
+              </div>
+              <p className="font-medium text-lg">
+                Your summary will appear here
+              </p>
+            </div>
+          )}
         </div>
       </div>
     </main>
