@@ -3,7 +3,6 @@
 **Turn 10 hours of reading into 15 minutes.**
 An intelligent, constraint-based summarization engine that uses **Recursive Map-Reduce** to compress full-length books into strict time budgets without losing the author's voice.
 
-![Demo Screenshot](demo.png) _(Optional: Add a screenshot here)_
 
 ## 🚀 The Engineering Problem
 
